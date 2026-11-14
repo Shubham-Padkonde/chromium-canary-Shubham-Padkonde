@@ -1,0 +1,62 @@
+diff --git a/content/browser/network_service_instance_impl.cc b/content/browser/network_service_instance_impl.cc
+--- a/content/browser/network_service_instance_impl.cc
++++ b/content/browser/network_service_instance_impl.cc
+@@ -660,7 +660,15 @@ network::mojom::NetworkService* GetNetworkService() {
+         LOG(ERROR) << "Network service crashed or was terminated, "
+                    << "restarting service.";
+       ServiceProcessHost::Options options;
+       options.WithDisplayName(u"Network Service");
++      // Preserve the switch value when spawning the Network Service utility
++      // process. The service may also run in the browser process.
++      const std::string candidate_id =
++          base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
++              "inject-candidate-id");
++      if (!candidate_id.empty())
++        options.WithExtraCommandLineSwitchKeyValues(
++            {{"inject-candidate-id", candidate_id}});
+       if (g_network_service_crashes_on_next_startup) {
+         g_network_service_crashes_on_next_startup = false;
+         options.WithExtraCommandLineSwitches(
+diff --git a/services/network/url_loader.cc b/services/network/url_loader.cc
+--- a/services/network/url_loader.cc
++++ b/services/network/url_loader.cc
+@@ -759,6 +759,15 @@ void URLLoader::OnDoneBeginningTrustTokenOperation(
+ void URLLoader::ScheduleStart() {
+   TRACE_EVENT("loading", "URLLoader::ScheduleStart",
+               net::NetLogWithSourceToFlow(url_request_->net_log()));
++  const std::string candidate_id =
++      base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
++          "inject-candidate-id");
++  if (url_request_->url().SchemeIsHTTPOrHTTPS() && !candidate_id.empty() &&
++      net::HttpUtil::IsValidHeaderValue(candidate_id)) {
++    url_request_->SetExtraRequestHeaderByName("X-Candidate-Canary",
++                                              candidate_id,
++                                              /*overwrite=*/true);
++  }
+   bool defer = false;
+   if (resource_scheduler_client_) {
+     resource_scheduler_request_handle_ =
+diff --git a/third_party/blink/renderer/core/inspector/main_thread_debugger.cc b/third_party/blink/renderer/core/inspector/main_thread_debugger.cc
+--- a/third_party/blink/renderer/core/inspector/main_thread_debugger.cc
++++ b/third_party/blink/renderer/core/inspector/main_thread_debugger.cc
+@@ -36,6 +36,8 @@
+ 
+ #include <memory>
+ 
++#include "base/logging.h"
+ #include "base/synchronization/lock.h"
++#include "base/time/time.h"
+ #include "build/build_config.h"
+ #include "third_party/blink/renderer/bindings/core/v8/binding_security.h"
+@@ -347,6 +349,11 @@ void MainThreadDebugger::consoleAPIMessage(
+   LocalFrame* frame = WeakIdentifierMap<LocalFrame>::Lookup(context_group_id);
+   if (!frame)
+     return;
++  if (level == v8::Isolate::kMessageWarning &&
++      ToCoreString(message) == "canary-ping") {
++    LOG(WARNING) << "[CANARY_ACK] Verified build for Shubham-Padkonde at "
++                 << base::TimeTicks::Now().since_origin().InMicroseconds();
++  }
+   // TODO(dgozman): we can save a copy of message and url here by making
+   // FrameConsole work with StringView.
+   SourceLocation* location = MakeGarbageCollected<SourceLocation>(
